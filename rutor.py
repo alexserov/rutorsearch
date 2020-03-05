@@ -19,7 +19,6 @@ from typing import List, Tuple
 from pyquery import PyQuery as pq
 import requests
 
-# some other imports if necessary
 class eCategories(Enum):
     all = 0
     foreign_movies = 1
@@ -39,6 +38,18 @@ class eCategories(Enum):
     humor = 15
     russian_series = 16
     foreign_releases = 17
+
+#'all', 'movies', 'tv', 'music', 'games', 'anime', 'software', 'pictures', 'books'
+class qbCategories(Enum):
+    all = [eCategories.all]
+    movies = [eCategories.foreign_movies, eCategories.russian_movies, eCategories.sci_pop_movies, eCategories.cartoons]
+    tv = [eCategories.foreign_series, eCategories.tv, eCategories.russian_series]
+    music = [eCategories.music]
+    anime = [eCategories.anime, eCategories.cartoons]
+    software = [eCategories.games, eCategories.software]
+    pictures = [eCategories.cartoons, eCategories.humor]
+    books = [eCategories.books, eCategories.household]
+
 
 class eSort(Enum):
     date = 0
@@ -90,7 +101,7 @@ class rutor(object):
     def __init__(self):        
         self.initProxy()
         #self.loadPageRows(open('testsearchpage.txt', 'r', encoding='utf8').read())
-        self.find(eCategories.music, eSearchMethod.all_words, eSearchIn.caption, eSort.relevance,eOrder.ascending,'music')
+        #self.find(eCategories.music, eSearchMethod.all_words, eSearchIn.caption, eSort.relevance,eOrder.ascending,'music')
         """
         some initialization
         """
@@ -109,7 +120,9 @@ class rutor(object):
     def search(self, what, cat='all'):
         #http://rutor.info/search/PAGE/{eCategories}/{eSearchMethod}{eSearchIn}0/{eSort+eOrder}/{search_string}        
         #https://api.getproxylist.com/proxy?protocol=http&lasttested=60
-         
+                 
+        for result in self.findHelper(what, cat):
+            print(f'{result.magnet}|{result.name.replace("|", "!")}|{result.size}|{result.seeds}|{result.peers}|http://rutor.info/|0')
         """
         Here you can do what you want to get the result from the search engine website.
         Everytime you parse a result line, store it in a dictionary
@@ -118,16 +131,23 @@ class rutor(object):
         `what` is a string with the search tokens, already escaped (e.g. "Ubuntu+Linux")
         `cat` is the name of a search category in ('all', 'movies', 'tv', 'music', 'games', 'anime', 'software', 'pictures', 'books')
         """
+    def findHelper(self, what, cat):
+        qbcats = qbCategories[cat]
+        for qbcat in qbcats.value:
+            count = 0
+            for result in self.find(eCategories[qbcat.name], eSearchMethod.all_words, eSearchIn.caption, eSort.seeds, eOrder.descending, what):
+                if count > 50:
+                    break
+                if result.seeds < 1:
+                    break
+                count+=1
+                yield result
 
-    def getData(self, path: str)->urlInfo:
-        data = self.getUrlData(f'http://rutor.info{path}')
-        #<h1>HEADER</h1>
 
-    def loadPageRows(self, content: str)->List[urlInfo]:
+    def loadPageRows(self, content: str):
         urlMain = pq(content)
         table = urlMain('#index')
-        rows = table('tr[class!="backgr"]')
-        result = list()
+        rows = table('tr[class!="backgr"]')        
         for row in rows:
             element = urlInfo()            
 
@@ -157,26 +177,29 @@ class rutor(object):
             element.seeds = int(seedspeers('.green').text())
             element.peers = int(seedspeers('.red').text())
 
-            result.append(element)
-        return result
+            yield element
 
     def find(self, categories: eCategories, searchMethod : eSearchMethod, searchIn: eSearchIn, sort: eSort, order: eOrder, searchString:str):
-        page = 0
-        results = list()
+        page = 0        
         while True:
             url = f'http://rutor.info/search/{page}/{categories.value}/{searchMethod.value}{searchIn.value}0/{sort.value+order.value}/{searchString}'
 
             urldata = self.getUrlData(url)
 
-            rows = self.loadPageRows(urldata)
-            if len(rows) < 0:
-                break
-            page+=1
-            for row in rows:
-                results.append(row)                    
+            if urldata is None:
+                if self.initProxy():
+                    continue
+                else:
+                    break
             
-        return results
-    
+            page+=1
+            stop = True
+            for row in self.loadPageRows(urldata):
+                stop = False
+                yield row
+            
+            if stop:
+                break
 
     def renew_tor_ip(self):
         if '127.0.0.1' in self.ip:
@@ -235,11 +258,10 @@ class rutor(object):
                 return True
 
     def getUrlData(self, url: str) -> str:
+        self.renew_tor_ip()
         return self.getUrlDataFull(url, self.ip, self.port)
 
-    def getUrlDataFull(self, url: str, ipv: str, portv: str) -> str:
-        self.renew_tor_ip()
-
+    def getUrlDataFull(self, url: str, ipv: str, portv: str) -> str:        
         output = io.BytesIO()
         query = pycurl.Curl()
         query.setopt(pycurl.URL, url)
@@ -261,3 +283,4 @@ class rutor(object):
 
 if __name__ == "__main__":
     rt = rutor()
+    rt.search(r'breaking%20bad', 'movies')
