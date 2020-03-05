@@ -15,8 +15,9 @@ import sys
 from stem import Signal
 from stem.control import Controller
 import re
-from typing import List
-from html.parser import HTMLParser
+from typing import List, Tuple
+from pyquery import PyQuery as pq
+import requests
 
 # some other imports if necessary
 class eCategories(Enum):
@@ -62,66 +63,13 @@ class eSearchIn(Enum):
 
 class urlInfo(object):
     link: str
+    magnet: str
     name: str
     size: int
     seeds: int
     leech: int
     engine_url: str
     desc_link: str
-
-class MyHTMLParser(HTMLParser):
-    skip = True
-    result = None
-    currentInfo = None
-    currentColumn = -1
-    def __init__(self):
-        HTMLParser.__init__(self)
-        self.result = list()
-
-    def handle_starttag(self, tag, attrs):
-        if self.skip == True:
-            if tag == 'div' and self.getAttrValue(attrs, 'id') == 'index':                
-                self.skip = False
-                return
-        if self.skip == True:
-            return
-        if tag == 'tr' and (self.getAttrValue(attrs, 'class')=='gai' or self.getAttrValue(attrs, 'class')=='tum'):
-            self.currentInfo = urlInfo()
-            self.currentColumn = -1
-        
-        if tag == 'td' and self.currentInfo:
-            self.currentColumn+=1
-            if self.currentColumn == 1:
-                """
-                link
-                """
-            if self.currentColumn == 3:
-                """
-                size
-                """
-            if self.currentColumn == 4:
-                """
-                seeds peers
-                """
-        
-
-    def getAttrValue(self, attrs: list, attrName: str):
-        for attr in attrs:
-            if attr[0] == attrName:
-                return attr[1]
-        return None
-
-    def handle_endtag(self, tag):
-        if self.skip == True:
-            return
-        if tag == 'tr' and self.currentInfo:
-            self.result.append(self.currentInfo)
-        if tag == 'table':
-            self.skip = True
-        print("Encountered an end tag :", tag)
-
-    def handle_data(self, data):
-        print("Encountered some data  :", data)
 
 class rutor(object):
     """
@@ -133,11 +81,15 @@ class rutor(object):
     `supported_categories`: What categories are supported by the search engine and their corresponding id,
     possible categories are ('all', 'movies', 'tv', 'music', 'games', 'anime', 'software', 'pictures', 'books').
     """
+    ip = '127.0.0.1'
+    port = '9050'
     url = 'http://rutor.info'
     name = 'Full engine name'    
     supported_categories = {'all': '0', 'movies': '6', 'tv': '4', 'music': '1', 'games': '2', 'anime': '7', 'software': '3'}
             
     def __init__(self):        
+        self.initProxy()
+        #self.loadPageRows(open('testsearchpage.txt', 'r', encoding='utf8').read())
         self.find(eCategories.music, eSearchMethod.all_words, eSearchIn.caption, eSort.relevance,eOrder.ascending,'music')
         """
         some initialization
@@ -171,6 +123,42 @@ class rutor(object):
         data = self.getUrlData(f'http://rutor.info{path}')
         #<h1>HEADER</h1>
 
+    def loadPageRows(self, content: str)->List[urlInfo]:
+        urlMain = pq(content)
+        table = urlMain('#index')
+        rows = table('tr[class!="backgr"]')
+        result = list()
+        for row in rows:
+            element = urlInfo()            
+
+            columns = pq(row)('td')
+            datacolumn = pq(columns[1])
+            
+            dcobjects = datacolumn('a')
+            element.magnet = dcobjects[1].attrib['href']
+            element.link = dcobjects[2].attrib['href']
+            element.name = dcobjects[2].text
+            
+            sizestring = columns[columns.length-2].text
+            sizebaseValue = re.findall(r'\d+\.\d+', sizestring)[0]
+            multiplier = 1
+            if 'KB' in sizestring:
+                multiplier = 1024
+            if 'MB' in sizestring:
+                multiplier = pow(1024, 2)
+            if 'GB' in sizestring:
+                multiplier = pow(1024, 3)
+            if 'TB' in sizestring:
+                multiplier = pow(1024, 4)
+
+            element.size = int((float(sizebaseValue)*multiplier))
+
+            seedspeers = pq(columns[columns.length-1])
+            element.seeds = int(seedspeers('.green').text())
+            element.peers = int(seedspeers('.red').text())
+
+            result.append(element)
+        return result
 
     def find(self, categories: eCategories, searchMethod : eSearchMethod, searchIn: eSearchIn, sort: eSort, order: eOrder, searchString:str):
         page = 0
@@ -179,40 +167,97 @@ class rutor(object):
             url = f'http://rutor.info/search/{page}/{categories.value}/{searchMethod.value}{searchIn.value}0/{sort.value+order.value}/{searchString}'
 
             urldata = self.getUrlData(url)
-            parser = MyHTMLParser()
-            parser.feed(urldata)
-            parser.close()
-                      
-            shouldBreak = True    
-            for res in re.findall(r'\/torrent\/\d+\/[^\""]+',self.getUrlData(url)):
-                results.append(res)
-                shouldBreak = False
-            if shouldBreak:
+
+            rows = self.loadPageRows(urldata)
+            if len(rows) < 0:
                 break
             page+=1
+            for row in rows:
+                results.append(row)                    
+            
         return results
     
 
     def renew_tor_ip(self):
-        with Controller.from_port(port = 9051) as controller:
-            controller.authenticate()
-            controller.signal(Signal.NEWNYM)
+        if '127.0.0.1' in self.ip:
+            try:
+                with Controller.from_port(port = 9051) as controller:
+                    controller.authenticate()
+                    controller.signal(Signal.NEWNYM)
+            except:
+                return
 
+    def getProxyFrom_proxylist_com(self) -> Tuple[str, str]:
+        res = requests.get('https://api.getproxylist.com/proxy?lasttested=1&protocol=socks5')
+        if res.status_code == 200:
+            proxyinfo = json.loads(res.content)
+            return proxyinfo['ip'], proxyinfo['port']
+        return None
 
-    def getUrlData(self, url: str):
+    def testProxy(self, ipcandidate: str, portcandidate: str) -> bool:
+        return self.getUrlDataFull('http://rutor.info', ipcandidate, portcandidate) is not None
+
+    def initProxyFromFile(self) -> bool:
+        proxylist = None
+        if path.exists('proxylist.txt'):
+            proxylist = open('proxylist.txt', 'r')
+        else:
+            return False
+        
+        for record in proxylist.readlines():
+            splittedRecord = record.split(' ')
+            ipcandidate = splittedRecord[0]
+            portcandidate = splittedRecord[1]
+            if self.testProxy(ipcandidate, portcandidate):
+                self.ip = ipcandidate
+                self.port = portcandidate
+                proxylist.close()
+                return True
+        
+        proxylist.close()
+        return False
+
+    def initProxy(self) -> bool:
+        if self.initProxyFromFile():
+            return True
+        while True:
+            ipport = self.getProxyFrom_proxylist_com()
+            if ipport is None:
+                return False
+            ipcandidate = ipport[0]
+            portcandidate = ipport[1]
+            if self.testProxy(ipcandidate, portcandidate):
+                self.ip = ipcandidate
+                self.port = portcandidate
+                proxylist = open('proxylist.txt', 'a')
+                proxylist.write(f'{ipcandidate} {portcandidate}\r\n')
+                proxylist.close()
+                return True
+
+    def getUrlData(self, url: str) -> str:
+        return self.getUrlDataFull(url, self.ip, self.port)
+
+    def getUrlDataFull(self, url: str, ipv: str, portv: str) -> str:
         self.renew_tor_ip()
 
         output = io.BytesIO()
         query = pycurl.Curl()
         query.setopt(pycurl.URL, url)
+        """
         query.setopt(pycurl.PROXY, 'localhost')
         query.setopt(pycurl.PROXYPORT, 9050)
+        """
+        query.setopt(pycurl.PROXY, ipv)
+        query.setopt(pycurl.PROXYPORT, int(portv))
+        #"""
         query.setopt(pycurl.PROXYTYPE, pycurl.PROXYTYPE_SOCKS5_HOSTNAME)
         query.setopt(pycurl.WRITEFUNCTION, output.write)
-        query.perform()            
-        
-        
-        return output.getvalue().decode('UTF-8')    
+
+        try:
+            query.perform()                            
+            return output.getvalue().decode('UTF-8')    
+        except:
+            return None
 
 if __name__ == "__main__":
     rt = rutor()
