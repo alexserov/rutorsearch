@@ -1,3 +1,4 @@
 .idea/ 
 __pycache__/
 engines/proxylist1.txt
+*.bak
