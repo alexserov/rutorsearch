@@ -5,9 +5,9 @@
 
 #from helpers import download_file, retrieve_url
 #from novaprinter import prettyPrinter
+#import sgmllib
 from enum import Enum
 from os import path
-#import sgmllib
 import io
 import pycurl
 import json
@@ -18,8 +18,9 @@ import re
 from typing import List, Tuple
 from pyquery import PyQuery as pq
 import requests
+from pathlib import Path
 
-class eCategories(Enum):
+class eCategories(object):
     all = 0
     foreign_movies = 1
     music = 2
@@ -40,7 +41,7 @@ class eCategories(Enum):
     foreign_releases = 17
 
 #'all', 'movies', 'tv', 'music', 'games', 'anime', 'software', 'pictures', 'books'
-class qbCategories(Enum):
+class qbCategories(object):
     all = [eCategories.all]
     movies = [eCategories.foreign_movies, eCategories.russian_movies, eCategories.sci_pop_movies, eCategories.cartoons]
     tv = [eCategories.foreign_series, eCategories.tv, eCategories.russian_series]
@@ -51,24 +52,24 @@ class qbCategories(Enum):
     books = [eCategories.books, eCategories.household]
 
 
-class eSort(Enum):
+class eSort(object):
     date = 0
     seeds = 2
     peers = 4
     caption = 6
     relevance = 10
 
-class eOrder(Enum):
+class eOrder(object):
     descending = 0
     ascending = 1
 
-class eSearchMethod(Enum):
+class eSearchMethod(object):
     phrase_full = 0
     all_words = 1
     any_word = 2
     expression = 3
 
-class eSearchIn(Enum):
+class eSearchIn(object):
     caption = 0
     caption_and_description = 1   
 
@@ -95,10 +96,11 @@ class rutor(object):
     ip = '127.0.0.1'
     port = '9050'
     url = 'http://rutor.info'
-    name = 'Full engine name'    
-    supported_categories = {'all': '0', 'movies': '6', 'tv': '4', 'music': '1', 'games': '2', 'anime': '7', 'software': '3'}
+    name = 'Rutor with proxy'    
+    supported_categories = {'all': '0', 'movies': '6', 'tv': '4', 'music': '1', 'games': '2', 'anime': '7', 'software': '3'}    
             
-    def __init__(self):        
+    def __init__(self):           
+        self.dbgprint('init')     
         self.initProxy()
         #self.loadPageRows(open('testsearchpage.txt', 'r', encoding='utf8').read())
         #self.find(eCategories.music, eSearchMethod.all_words, eSearchIn.caption, eSort.relevance,eOrder.ascending,'music')
@@ -120,9 +122,32 @@ class rutor(object):
     def search(self, what, cat='all'):
         #http://rutor.info/search/PAGE/{eCategories}/{eSearchMethod}{eSearchIn}0/{eSort+eOrder}/{search_string}        
         #https://api.getproxylist.com/proxy?protocol=http&lasttested=60
-                 
+        # 
+        from helpers import download_file, retrieve_url
+        from novaprinter import prettyPrinter
+        #import sgmllib                 
+        """
+        link => A string corresponding the the download link (the .torrent file or magnet link)
+        name => A unicode string corresponding to the torrent's name (i.e: "Ubuntu Linux v6.06")
+        size => A string corresponding to the torrent size (i.e: "6 MB" or "200 KB" or "1.2 GB"...)
+        seeds => The number of seeds for this torrent (as a string)
+        leech => The number of leechers for this torrent (a a string)
+        engine_url => The search engine url (i.e: http://www.mininova.org)
+        desc_link => A string corresponding to the the description page for the torrent
+        
+        """
+
         for result in self.findHelper(what, cat):
-            print(f'{result.magnet}|{result.name.replace("|", "!")}|{result.size}|{result.seeds}|{result.peers}|http://rutor.info/|0')
+            prettyPrinter({
+                'link':result.magnet, 
+                'name' : result.name.replace("|", "!"),
+                'size' : str(result.size),
+                'seeds' : str(result.seeds),
+                'leech' : str(result.peers),
+                'engine_url' : 'http//rutor.info',
+                'desc_link' : '-1'
+                })
+            #print(f'{result.magnet}|{result.name.replace("|", "!")}|{result.size}|#{result.seeds}|#{result.peers}|http://rutor.info')
         """
         Here you can do what you want to get the result from the search engine website.
         Everytime you parse a result line, store it in a dictionary
@@ -132,10 +157,11 @@ class rutor(object):
         `cat` is the name of a search category in ('all', 'movies', 'tv', 'music', 'games', 'anime', 'software', 'pictures', 'books')
         """
     def findHelper(self, what, cat):
-        qbcats = qbCategories[cat]
-        for qbcat in qbcats.value:
+
+        qbcats = getattr(qbCategories, cat)
+        for qbcat in qbcats:
             count = 0
-            for result in self.find(eCategories[qbcat.name], eSearchMethod.all_words, eSearchIn.caption, eSort.seeds, eOrder.descending, what):
+            for result in self.find(qbcat, eSearchMethod.all_words, eSearchIn.caption, eSort.seeds, eOrder.descending, what):
                 if count > 50:
                     break
                 if result.seeds < 1:
@@ -179,14 +205,14 @@ class rutor(object):
 
             yield element
 
-    def find(self, categories: eCategories, searchMethod : eSearchMethod, searchIn: eSearchIn, sort: eSort, order: eOrder, searchString:str):
+    def find(self, categories: int, searchMethod : int, searchIn: int, sort: int, order: int, searchString:str):
         page = 0        
         while True:
-            url = f'http://rutor.info/search/{page}/{categories.value}/{searchMethod.value}{searchIn.value}0/{sort.value+order.value}/{searchString}'
+            url = f'http://rutor.info/search/{page}/{categories}/{searchMethod}{searchIn}0/{sort+order}/{searchString}'
 
             urldata = self.getUrlData(url)
 
-            if urldata is None:
+            if urldata is None or 'rutor' not in urldata:
                 if self.initProxy():
                     continue
                 else:
@@ -211,23 +237,35 @@ class rutor(object):
                 return
 
     def getProxyFrom_proxylist_com(self) -> Tuple[str, str]:
-        res = requests.get('https://api.getproxylist.com/proxy?lasttested=1&protocol=socks5')
+        res = requests.get('https://api.getproxylist.com/proxy?lasttested=1&protocol=socks5&allowshttps=1')
         if res.status_code == 200:
             proxyinfo = json.loads(res.content)
             return proxyinfo['ip'], proxyinfo['port']
         return None
 
     def testProxy(self, ipcandidate: str, portcandidate: str) -> bool:
-        return self.getUrlDataFull('http://rutor.info', ipcandidate, portcandidate) is not None
+        self.dbgprint(f'test[{ipcandidate}:{portcandidate}]')
+        result = self.getUrlDataFull('https://api.ipify.org/?format=json', ipcandidate, portcandidate)
+        try:
+            return json.loads(result)['ip'] is not None
+        except:
+            return False
+
 
     def initProxyFromFile(self) -> bool:
+        self.dbgprint('start init from file')
         proxylist = None
-        if path.exists('proxylist.txt'):
+        if Path('proxylist.txt').exists():
             proxylist = open('proxylist.txt', 'r')
         else:
-            return False
+            proxylist = open('proxylist.txt', 'w')
+            proxylist.write('127.0.0.1 9050\n')
+            proxylist.close()
+            proxylist = open('proxylist.txt', 'r')        
         
         for record in proxylist.readlines():
+            if not record:
+                break
             splittedRecord = record.split(' ')
             ipcandidate = splittedRecord[0]
             portcandidate = splittedRecord[1]
@@ -243,7 +281,8 @@ class rutor(object):
     def initProxy(self) -> bool:
         if self.initProxyFromFile():
             return True
-        while True:
+        self.dbgprint('start init from network')
+        while True:            
             ipport = self.getProxyFrom_proxylist_com()
             if ipport is None:
                 return False
@@ -253,7 +292,7 @@ class rutor(object):
                 self.ip = ipcandidate
                 self.port = portcandidate
                 proxylist = open('proxylist.txt', 'a')
-                proxylist.write(f'{ipcandidate} {portcandidate}\r\n')
+                proxylist.write(f'{ipcandidate} {portcandidate}\n')
                 proxylist.close()
                 return True
 
@@ -272,6 +311,9 @@ class rutor(object):
         query.setopt(pycurl.PROXY, ipv)
         query.setopt(pycurl.PROXYPORT, int(portv))
         #"""
+        query.setopt(pycurl.TIMEOUT, 10)
+        query.setopt(pycurl.SSL_VERIFYPEER, 0)
+        query.setopt(pycurl.SSL_VERIFYHOST, 0)
         query.setopt(pycurl.PROXYTYPE, pycurl.PROXYTYPE_SOCKS5_HOSTNAME)
         query.setopt(pycurl.WRITEFUNCTION, output.write)
 
@@ -281,6 +323,12 @@ class rutor(object):
         except:
             return None
 
+    def dbgprint(self, value):
+        """
+        print(value)
+        """
+
 if __name__ == "__main__":
+    print('main\n')
     rt = rutor()
     rt.search(r'breaking%20bad', 'movies')
